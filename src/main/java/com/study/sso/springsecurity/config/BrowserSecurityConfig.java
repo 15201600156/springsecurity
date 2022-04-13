@@ -1,5 +1,6 @@
 package com.study.sso.springsecurity.config;
 
+import com.study.sso.springsecurity.filter.SmsCodeFilter;
 import com.study.sso.springsecurity.filter.ValidateCodeFilter;
 import com.study.sso.springsecurity.handler.MyAuthenticationFailureHandler;
 import com.study.sso.springsecurity.handler.MyAuthenticationSucessHandler;
@@ -36,10 +37,19 @@ public class BrowserSecurityConfig extends WebSecurityConfigurerAdapter {
     private DataSource dataSource;
 
 
+    //短信验证
+    @Autowired
+    private SmsCodeFilter smsCodeFilter;
+
+    @Autowired
+    private SmsAuthenticationConfig smsAuthenticationConfig;
+
+
     @Override
     protected void configure(HttpSecurity http) throws Exception {
-        http.addFilterBefore(validateCodeFilter, UsernamePasswordAuthenticationFilter.class). // 添加验证码校验过滤器
-                 formLogin() // 表单登录
+        http.addFilterBefore(validateCodeFilter, UsernamePasswordAuthenticationFilter.class) // 添加验证码校验过滤器
+                 .addFilterBefore(smsCodeFilter, UsernamePasswordAuthenticationFilter.class)// 添加短信验证码校验过滤器
+                 .formLogin() // 表单登录
                 // http.httpBasic() // HTTP Basic
                 .loginPage("/login.html") // 登录跳转 URL
                 .loginProcessingUrl("/login") //// 处理表单登录 URL
@@ -54,10 +64,11 @@ public class BrowserSecurityConfig extends WebSecurityConfigurerAdapter {
                 .authorizeRequests() // 授权配置
                 .antMatchers("/login.html").permitAll() //表示跳转到登录页面的请求不被拦截，否则会进入无限循环
                 .antMatchers("/authentication/require").permitAll() // 登录跳转 URL 无需认证
-                .antMatchers("/css/**","/code/image").permitAll() //无需认证的请求
+                .antMatchers("/css/**","/code/image","/code/sms").permitAll() //无需认证的请求
                 .anyRequest()  // 所有请求
-                .authenticated().// 都需要认证
-                 and().csrf().disable(); //CSRF攻击防御关了
+                .authenticated()// 都需要认证
+                .and().csrf().disable() //CSRF攻击防御关了
+                .apply(smsAuthenticationConfig); // 将短信验证码认证配置加到 Spring Security 中
     }
 
     @Bean

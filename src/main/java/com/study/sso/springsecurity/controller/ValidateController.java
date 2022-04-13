@@ -1,5 +1,6 @@
 package com.study.sso.springsecurity.controller;
 
+import com.study.sso.springsecurity.constant.Constants;
 import com.study.sso.springsecurity.entity.ImageCode;
 import org.springframework.social.connect.web.HttpSessionSessionStrategy;
 import org.springframework.social.connect.web.SessionStrategy;
@@ -15,17 +16,19 @@ import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.util.Random;
 
+/**
+ * 验证码
+ */
 @RestController
 public class ValidateController {
 
-    public final static String SESSION_KEY_IMAGE_CODE = "SESSION_KEY_IMAGE_CODE";
 
     private SessionStrategy sessionStrategy = new HttpSessionSessionStrategy();
 
     @GetMapping("/code/image")
     public void createCode(HttpServletRequest request, HttpServletResponse response) throws IOException {
         ImageCode imageCode = createImageCode();
-        sessionStrategy.setAttribute(new ServletWebRequest(request), SESSION_KEY_IMAGE_CODE, imageCode);
+        sessionStrategy.setAttribute(new ServletWebRequest(request), Constants.SESSION_KEY_IMAGE_CODE, imageCode);
         ImageIO.write(imageCode.getImage(), "jpeg", response.getOutputStream());
     }
 

@@ -29,8 +29,8 @@ public class MyAuthenticationSucessHandler implements AuthenticationSuccessHandl
     @Override
     public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
                                         Authentication authentication) throws IOException {
-        //SavedRequest savedRequest = requestCache.getRequest(request, response);
-        //redirectStrategy.sendRedirect(request, response, savedRequest.getRedirectUrl());  //哪里来的跳转到哪
+        SavedRequest savedRequest = requestCache.getRequest(request, response);
+//        redirectStrategy.sendRedirect(request, response, savedRequest.getRedirectUrl());  //哪里来的跳转到哪
         redirectStrategy.sendRedirect(request, response, "/index");  //跳转指定位置
     }
 }
