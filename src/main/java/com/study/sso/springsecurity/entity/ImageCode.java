@@ -3,11 +3,14 @@ package com.study.sso.springsecurity.entity;
 import lombok.Data;
 
 import java.awt.image.BufferedImage;
+import java.io.Serializable;
 import java.time.LocalDateTime;
 
 @Data
-public class ImageCode {
+public class ImageCode  implements Serializable {
 
+
+    private static final long serialVersionUID = -7831615057416168810L;
     private BufferedImage image;
 
     private String code;

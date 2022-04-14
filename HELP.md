@@ -1831,3 +1831,394 @@ public class BrowserSecurityConfig extends WebSecurityConfigurerAdapter {
 
 
 
+# Spring Security Session管理
+
+用户登录成功后，信息保存在服务器Session中，
+
+## Session超时设置  
+
+Session超时时间也就是用户登录的有效时间。要设置Session超时时间很简单，只需要在配置文件中添加：
+
+```
+server:
+  port: 8080
+
+
+  servlet:
+    session:
+      timeout: 60
+```
+
+单位为秒，通过上面的配置，Session的有效期为一个小时。
+
+值得注意的是，Session的最小有效期为60秒，也就是说即使你设置为小于60秒的值，其有效期还是为60秒。查看`TomcatEmbeddedServletContainerFactory`的源码即可发现原因：
+
+![618100327.png](doc/618100327.png)
+
+Session失效后，刷新页面后将跳转到认证页面，我们可以再添加一些配置，自定义Session失效后的一些行为。
+
+在Spring Security中配置Session管理器，并配置Session失效后要跳转的URL：
+
+```java
+@Override
+protected void configure(HttpSecurity http) throws Exception {
+    http.addFilterBefore(validateCodeFilter, UsernamePasswordAuthenticationFilter.class) // 添加验证码校验过滤器
+             .addFilterBefore(smsCodeFilter, UsernamePasswordAuthenticationFilter.class)// 添加短信验证码校验过滤器
+             .formLogin() // 表单登录
+            // http.httpBasic() // HTTP Basic
+            .loginPage("/login.html") // 登录跳转 URL
+            .loginProcessingUrl("/login") //// 处理表单登录 URL
+            .successHandler(authenticationSucessHandler) // 处理登录成功
+            .failureHandler(authenticationFailureHandler) // 处理登录失败
+     .and()
+            .rememberMe() //记住我
+            .tokenRepository(persistentTokenRepository()) // 配置 token 持久化仓库
+            .tokenValiditySeconds(3600) // remember 过期时间，单为秒
+            .userDetailsService(userDetailService) // 处理自动登录逻辑
+     .and()
+            .authorizeRequests() // 授权配置
+            .antMatchers("/login.html").permitAll() //表示跳转到登录页面的请求不被拦截，否则会进入无限循环
+            .antMatchers("/authentication/require").permitAll() // 登录跳转 URL 无需认证
+            .antMatchers("/css/**","/code/image","/code/sms").permitAll() //无需认证的请求
+            .anyRequest()  // 所有请求
+            .authenticated()// 都需要认证
+     .and().csrf().disable() //CSRF攻击防御关了
+            .apply(smsAuthenticationConfig) // 将短信验证码认证配置加到 Spring Security 中
+    .and()
+            .sessionManagement() // 添加 Session管理器
+            .invalidSessionUrl("/session/invalid"); // Session失效后跳转到这个链接
+}
+```
+
+上面配置了Session失效后跳转到`/session/invalid`，并且将这个URL添加到了免认证路径中。
+
+在Controller里添加一个方法，映射该请求：
+
+```java
+@GetMapping("session/invalid")
+@ResponseStatus(HttpStatus.UNAUTHORIZED)
+public String sessionInvalid() {
+    return "session已失效，请重新认证";
+}
+```
+
+为了演示，我们将Session的超时时间设置为最小值60秒，重启项目，认证后等待60秒并刷新页面：
+
+![1649842022433](doc/1649842022433.png)
+
+
+
+
+
+## Session并发控制
+
+Session并发控制可以控制一个账号同一时刻最多能登录多少个。我们在Spring Security配置中继续添加Session相关配置:
+
+```java
+
+    @Autowired
+    private MySessionExpiredStrategy sessionExpiredStrategy;
+    
+@Override
+protected void configure(HttpSecurity http) throws Exception {
+    http.addFilterBefore(validateCodeFilter, UsernamePasswordAuthenticationFilter.class) // 添加验证码校验过滤器
+             .addFilterBefore(smsCodeFilter, UsernamePasswordAuthenticationFilter.class)// 添加短信验证码校验过滤器
+             .formLogin() // 表单登录
+            // http.httpBasic() // HTTP Basic
+            .loginPage("/login.html") // 登录跳转 URL
+            .loginProcessingUrl("/login") //// 处理表单登录 URL
+            .successHandler(authenticationSucessHandler) // 处理登录成功
+            .failureHandler(authenticationFailureHandler) // 处理登录失败
+     .and()
+            .rememberMe() //记住我
+            .tokenRepository(persistentTokenRepository()) // 配置 token 持久化仓库
+            .tokenValiditySeconds(3600) // remember 过期时间，单为秒
+            .userDetailsService(userDetailService) // 处理自动登录逻辑
+     .and()
+            .authorizeRequests() // 授权配置
+            .antMatchers("/login.html").permitAll() //表示跳转到登录页面的请求不被拦截，否则会进入无限循环
+            .antMatchers("/authentication/require").permitAll() // 登录跳转 URL 无需认证
+            .antMatchers("/css/**","/code/image","/code/sms","/session/invalid").permitAll() //无需认证的请求
+            .anyRequest()  // 所有请求
+            .authenticated()// 都需要认证
+     .and().csrf().disable() //CSRF攻击防御关了
+            .apply(smsAuthenticationConfig) // 将短信验证码认证配置加到 Spring Security 中
+    .and()
+            .sessionManagement() // 添加 Session管理器
+            .invalidSessionUrl("/session/invalid") // Session失效后跳转到这个链接
+            .maximumSessions(1)   //配置了最大Session并发数量为1个
+            .expiredSessionStrategy(sessionExpiredStrategy); //Session在并发下失效后的处理策略
+}
+```
+
+
+
+`maximumSessions`配置了最大Session并发数量为1个，如果user这个账户登录后，在另一个客户端也使用user账户登录，那么第一个使用user登录的账户将会失效，类似于一个先入先出队列。`expiredSessionStrategy`配置了Session在并发下失效后的处理策略，这里为我们自定义的策略`MySessionExpiredStrategy`。
+
+`MySessionExpiredStrategy`实现`SessionInformationExpiredStrategy`：
+
+```java
+package com.study.sso.springsecurity.config;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.security.web.session.SessionInformationExpiredEvent;
+import org.springframework.security.web.session.SessionInformationExpiredStrategy;
+import org.springframework.stereotype.Component;
+
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+
+@Component
+public class MySessionExpiredStrategy implements SessionInformationExpiredStrategy {
+
+    @Override
+    public void onExpiredSessionDetected(SessionInformationExpiredEvent event) throws IOException, ServletException {
+        HttpServletResponse response = event.getResponse();
+        response.setStatus(HttpStatus.UNAUTHORIZED.value());
+        response.setContentType("application/json;charset=utf-8");
+        response.getWriter().write("您的账号已经在别的地方登录，当前登录已失效。如果密码遭到泄露，请立即修改密码！");
+    }
+}
+```
+
+第一个浏览器登陆成功，第二个浏览器登陆后，第一个浏览器刷新后的效果
+![1649842217002](doc/1649842217002.png)
+
+除了后者将前者踢出的策略，我们也可以控制当Session达到最大有效数的时候，不再允许相同的账户登录。
+
+> 在configure添加此语句就可以
+
+```
+ .maxSessionsPreventsLogin(true)
+```
+
+可以看到登录受限。
+
+
+  ![1649842420908](doc/1649842420908.png)
+
+## Session集群处理
+
+Session集群听着高大上，其实实现起来很简单。当我们登录成功后，用户认证的信息存储在Session中，而这些Session默认是存储在运行运用的服务器上的，比如Tomcat，netty等。当应用集群部署的时候，用户在A应用上登录认证了，后续通过负载均衡可能会把请求发送到B应用，而B应用服务器上并没有与该请求匹配的认证Session信息，所以用户就需要重新进行认证。要解决这个问题，我们可以把Session信息存储在第三方容器里（如Redis集群），而不是各自的服务器，这样应用集群就可以通过第三方容器来共享Session了。
+
+我们引入Redis和Spring Session依赖：
+
+```java
+
+        <!--redis启动器-->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <!--整合springsession，实现session共享-->
+        <dependency>
+            <groupId>org.springframework.session</groupId>
+            <artifactId>spring-session-data-redis</artifactId>
+        </dependency>
+```
+
+然后在yml中配置Session存储方式为Redis：
+
+```
+spring:
+  session:
+    store-type: redis
+```
+
+为了方便，Redis配置采用默认配置即可。
+
+开启Redis，并且启动两个应用实例，一个端口为8080，另一个端口为9090。
+
+我们现在8080端口应用上登录：
+
+![1649914424165](doc/1649914424165.png)
+
+
+
+![1649914414053](doc/1649914414053.png)
+
+可以看到登录也是生效的。这就实现了集群化Session管理。
+
+## 其他操作
+
+`sessionRegistry`包含了一些使用的操作Session的方法，比如：
+
+1. 踢出用户（让Session失效）：
+
+   ```
+   String currentSessionId = request.getRequestedSessionId();
+   sessionRegistry.getSessionInformation(sessionId).expireNow();
+   ```
+
+2. 获取所有Session信息：
+
+   ```
+   List<Object> principals = sessionRegistry.getAllPrincipals();
+   ```
+
+# Spring Security退出登录
+
+Spring Security默认的退出登录URL为`/logout`，退出登录后，Spring Security会做如下处理：
+
+1. 是当前的Sesion失效；
+2. 清除与当前用户关联的RememberMe记录；
+3. 清空当前的SecurityContext；
+4. 重定向到登录页。
+
+Spring Security允许我们通过配置来更改上面这些默认行为。
+
+## 自定义退出登录行为
+
+我们在Spring Security配置中添加如下配置:
+
+```
+......
+.and()
+    .logout()
+    .logoutUrl("/signout")
+    .logoutSuccessUrl("/signout/success")
+    .deleteCookies("JSESSIONID")
+.and()
+......
+```
+
+  上面配置了退出登录的URL为`/signout`，退出成功后跳转的URL为`/signout/success`，退出成功后删除名称为`JSESSIONID`的cookie。
+
+在Controller中添加和`/signout/success`对应的方法：
+
+```java
+@GetMapping("/signout/success")
+public String signout() {
+    return "退出成功，请重新登录";
+}
+```
+
+
+
+接着将`/signout/success`添加到免认证路径里。启动项目，登录后访问`/signout`：
+
+![1649914999180](doc/1649914999180.png)
+
+除了指定`logoutUrl`外，我们也可以通过`logoutSuccessHandler`指定退出成功处理器来处理退出成功后的逻辑：
+
+```java
+@Autowired
+private MyLogOutSuccessHandler logOutSuccessHandler;
+
+......
+.and()
+    .logout()
+    .logoutUrl("/signout")
+    // .logoutSuccessUrl("/signout/success")
+    .logoutSuccessHandler(logOutSuccessHandler)
+    .deleteCookies("JSESSIONID")
+.and()
+......
+```
+
+效果是跟上方一样的
+
+![1649915272485](doc/1649915272485.png)
+
+# Spring Security权限控制
+
+Spring Security权限控制可以配合授权注解使用，具体有哪些注解可以参考[Spring-Security保护方法](https://mrbird.cc/Spring-Security保护方法.html)。
+
+Security配置文件中添加如下注解：
+
+```java
+@Configuration
+@EnableGlobalMethodSecurity(prePostEnabled = true)
+public class BrowserSecurityConfig extends WebSecurityConfigurerAdapter {
+   ...
+}
+```
+
+在`UserDetailService`中，我们给当前登录用户授予了”admin”的权限，我们将这块代码改造一下：当登录用户为user的时候，其拥有”admin”权限，其他用户则只有”test”权限：
+
+```java
+@Configuration
+public class UserDetailService implements UserDetailsService {
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Override
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        // 模拟一个用户，替代数据库获取逻辑
+        MyUser user = new MyUser();
+        user.setUserName(username);
+        user.setPassword(this.passwordEncoder.encode("123456"));
+        // 输出加密后的密码
+        System.out.println(user.getPassword());
+
+        List<GrantedAuthority> authorities = new ArrayList<>();
+        if (StringUtils.equalsIgnoreCase("user", username)) {
+            authorities = AuthorityUtils.commaSeparatedStringToAuthorityList("admin");
+        } else {
+            authorities = AuthorityUtils.commaSeparatedStringToAuthorityList("test");
+        }
+        return new User(username, user.getPassword(), user.isEnabled(),
+                user.isAccountNonExpired(), user.isCredentialsNonExpired(),
+                user.isAccountNonLocked(), authorities);
+    }
+}
+```
+
+添加一个方法，并且使用权限注解标明只有拥有“admin”权限的人才能访问：
+
+```java
+@GetMapping("/auth/admin")
+@PreAuthorize("hasAuthority('admin')")
+public String authenticationTest() {
+    return "您拥有admin权限，可以查看";
+}
+```
+
+启动系统，使用user账号登录：
+
+![1649915889503](doc/1649915889503.png)
+
+
+
+使用lb账号登陆：
+
+![1649915854822](doc/1649915854822.png)
+
+可以看到，lb没有权限访问，返回403错误码。
+
+我们可以自定义权限不足处理器来处理权限不足时候的操作。
+
+新增一个处理器`MyAuthenticationAccessDeniedHandler`，实现`AccessDeniedHandler`接口：
+
+```java
+java@Component
+public class MyAuthenticationAccessDeniedHandler implements AccessDeniedHandler {
+
+    @Override
+    public void handle(HttpServletRequest request, HttpServletResponse response, AccessDeniedException accessDeniedException) throws IOException {
+        response.setStatus(HttpStatus.INTERNAL_SERVER_ERROR.value());
+        response.setContentType("application/json;charset=utf-8");
+        response.getWriter().write("很抱歉，您没有该访问权限");
+    }
+}
+```
+
+然后将这个处理器添加到Spring Security配置链中:
+
+```java
+ @Autowired 
+private MyAuthenticationAccessDeniedHandler authenticationAccessDeniedHandler;
+
+@Override
+protected void configure(HttpSecurity http) throws Exception {
+    http.exceptionHandling()
+            .accessDeniedHandler(authenticationAccessDeniedHandler)
+        .and()
+    ......
+}
+```
+
+重启系统，再次使用lb账号访问`/auth/admin`：
+
+![1649916267757](doc/1649916267757.png)

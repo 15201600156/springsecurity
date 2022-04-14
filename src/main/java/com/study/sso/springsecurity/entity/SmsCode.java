@@ -2,13 +2,14 @@ package com.study.sso.springsecurity.entity;
 
 import lombok.Data;
 
+import java.io.Serializable;
 import java.time.LocalDateTime;
 
 /**
  * 短信验证码对象SmsCode
  */
 @Data
-public class SmsCode {
+public class SmsCode implements Serializable {
     /**
      * 验证码
      */
